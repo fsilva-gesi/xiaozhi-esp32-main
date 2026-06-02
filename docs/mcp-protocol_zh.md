@@ -1,49 +1,49 @@
-# MCP (Model Context Protocol) 交互流程
+# Fluxo de interação MCP (Model Context Protocol)
 
-NOTICE: AI 辅助生成, 在实现后台服务时, 请参照代码确认细节!!
+NOTICE: gerado com assistência de AI. Ao implementar o backend, confirme os detalhes no código!
 
-本项目中的 MCP 协议用于后台 API（MCP 客户端）与 ESP32 设备（MCP 服务器）之间的通信，以便后台能够发现和调用设备提供的功能（工具）。
+No projeto, o protocolo MCP é usado para comunicação entre a API do backend (cliente MCP) e o dispositivo ESP32 (servidor MCP), permitindo que o backend descubra e invoque funcionalidades fornecidas pelo dispositivo (ferramentas).
 
-## 协议格式
+## Formato do protocolo
 
-根据代码 (`main/protocols/protocol.cc`, `main/mcp_server.cc`)，MCP 消息是封装在基础通信协议（如 WebSocket 或 MQTT）的消息体中的。其内部结构遵循 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 规范。
+De acordo com o código (`main/protocols/protocol.cc`, `main/mcp_server.cc`), as mensagens MCP são encapsuladas no corpo da comunicação base (por exemplo, WebSocket ou MQTT). A estrutura interna segue a especificação [JSON-RPC 2.0](https://www.jsonrpc.org/specification).
 
-整体消息结构示例：
+Exemplo geral de mensagem:
 
 ```json
 {
-  "session_id": "...", // 会话 ID
-  "type": "mcp",       // 消息类型，固定为 "mcp"
-  "payload": {         // JSON-RPC 2.0 负载
+  "session_id": "...", // ID da sessão
+  "type": "mcp",       // Tipo de mensagem, fixo como "mcp"
+  "payload": {         // Payload JSON-RPC 2.0
     "jsonrpc": "2.0",
-    "method": "...",   // 方法名 (如 "initialize", "tools/list", "tools/call")
-    "params": { ... }, // 方法参数 (对于 request)
-    "id": ...,         // 请求 ID (对于 request 和 response)
-    "result": { ... }, // 方法执行结果 (对于 success response)
-    "error": { ... }   // 错误信息 (对于 error response)
+    "method": "...",   // Nome do método (por exemplo, "initialize", "tools/list", "tools/call")
+    "params": { ... }, // Parâmetros do método (em requests)
+    "id": ...,         // ID da requisição (em requests e responses)
+    "result": { ... }, // Resultado da execução (em success response)
+    "error": { ... }   // Erro (em error response)
   }
 }
 ```
 
-其中，`payload` 部分是标准的 JSON-RPC 2.0 消息：
+A parte `payload` é uma mensagem JSON-RPC 2.0 padrão:
 
-- `jsonrpc`: 固定的字符串 "2.0"。
-- `method`: 要调用的方法名称 (对于 Request)。
-- `params`: 方法的参数，一个结构化值，通常为对象 (对于 Request)。
-- `id`: 请求的标识符，客户端发送请求时提供，服务器响应时原样返回。用于匹配请求和响应。
-- `result`: 方法成功执行时的结果 (对于 Success Response)。
-- `error`: 方法执行失败时的错误信息 (对于 Error Response)。
+- `jsonrpc`: string fixa `"2.0"`.
+- `method`: nome do método a ser chamado (em requests).
+- `params`: parâmetros do método, tipicamente um objeto (em requests).
+- `id`: identificador da requisição; o servidor retorna o mesmo valor na resposta para correspondência.
+- `result`: resultado quando o método é executado com sucesso.
+- `error`: informação de erro quando a execução falha.
 
-## 交互流程及发送时机
+## Fluxo de interação e momentos de envio
 
-MCP 的交互主要围绕客户端（后台 API）发现和调用设备上的“工具”（Tool）进行。
+A interação MCP gira em torno do backend descobrindo e chamando as ferramentas do dispositivo.
 
-1.  **连接建立与能力通告**
+1.  **Estabelecimento de conexão e anúncio de capacidades**
 
-    - **时机：** 设备启动并成功连接到后台 API 后。
-    - **发送方：** 设备。
-    - **消息：** 设备发送基础协议的 "hello" 消息给后台 API，消息中包含设备支持的能力列表，例如通过支持 MCP 协议 (`"mcp": true`)。
-    - **示例 (非 MCP 负载，而是基础协议消息):**
+    - **Quando:** após o dispositivo iniciar e conectar com sucesso ao backend.
+    - **Quem envia:** dispositivo.
+    - **O que envia:** mensagem `hello` no protocolo base, indicando as capacidades suportadas, por exemplo, `"mcp": true`.
+    - **Exemplo (não é payload MCP, mas mensagem do protocolo base):**
       ```json
       {
         "type": "hello",
@@ -52,18 +52,18 @@ MCP 的交互主要围绕客户端（后台 API）发现和调用设备上的“
           "mcp": true,
           ...
         },
-        "transport": "websocket", // 或 "mqtt"
+        "transport": "websocket", // ou "mqtt"
         "audio_params": { ... },
-        "session_id": "..." // 设备收到服务器hello后可能设置
+        "session_id": "..." // pode ser definido após receber o hello do servidor
       }
       ```
 
-2.  **初始化 MCP 会话**
+2.  **Inicialização da sessão MCP**
 
-    - **时机：** 后台 API 收到设备 "hello" 消息，确认设备支持 MCP 后，通常作为 MCP 会话的第一个请求发送。
-    - **发送方：** 后台 API (客户端)。
-    - **方法：** `initialize`
-    - **消息 (MCP payload):**
+    - **Quando:** o backend recebe o `hello` do dispositivo e confirma suporte a MCP; geralmente é o primeiro request MCP.
+    - **Quem envia:** backend (cliente).
+    - **Método:** `initialize`
+    - **Payload MCP:**
 
       ```json
       {
@@ -71,159 +71,155 @@ MCP 的交互主要围绕客户端（后台 API）发现和调用设备上的“
         "method": "initialize",
         "params": {
           "capabilities": {
-            // 客户端能力，可选
+            // capacidades opcionais do cliente
 
-            // 摄像头视觉相关
             "vision": {
-              "url": "...", //摄像头: 图片处理地址(必须是http地址, 不是websocket地址)
-              "token": "..." // url token
+              "url": "...", // câmera: URL de processamento de imagem (deve ser HTTP, não WebSocket)
+              "token": "..." // token da URL
             }
 
-            // ... 其他客户端能力
+            // ... outras capacidades do cliente
           }
         },
-        "id": 1 // 请求 ID
+        "id": 1
       }
       ```
 
-    - **设备响应时机：** 设备收到 `initialize` 请求并处理后。
-    - **设备响应消息 (MCP payload):**
+    - **Quando o dispositivo responde:** após processar o request `initialize`.
+    - **Resposta do dispositivo:**
       ```json
       {
         "jsonrpc": "2.0",
-        "id": 1, // 匹配请求 ID
+        "id": 1,
         "result": {
           "protocolVersion": "2024-11-05",
           "capabilities": {
-            "tools": {} // 这里的 tools 似乎不列出详细信息，需要 tools/list
+            "tools": {} // pode não listar detalhes aqui; use tools/list
           },
           "serverInfo": {
-            "name": "...", // 设备名称 (BOARD_NAME)
-            "version": "..." // 设备固件版本
+            "name": "...", // nome do dispositivo (BOARD_NAME)
+            "version": "..." // versão do firmware
           }
         }
       }
       ```
 
-3.  **发现设备工具列表**
+3.  **Descoberta da lista de ferramentas do dispositivo**
 
-    - **时机：** 后台 API 需要获取设备当前支持的具体功能（工具）列表及其调用方式时。
-    - **发送方：** 后台 API (客户端)。
-    - **方法：** `tools/list`
-    - **消息 (MCP payload):**
+    - **Quando:** quando o backend precisa saber quais funcionalidades o dispositivo suporta.
+    - **Quem envia:** backend (cliente).
+    - **Método:** `tools/list`
+    - **Payload MCP:**
       ```json
       {
         "jsonrpc": "2.0",
         "method": "tools/list",
         "params": {
-          "cursor": "" // 用于分页，首次请求为空字符串
+          "cursor": "" // usado para paginação; string vazia na primeira requisição
         },
-        "id": 2 // 请求 ID
+        "id": 2
       }
       ```
-    - **设备响应时机：** 设备收到 `tools/list` 请求并生成工具列表后。
-    - **设备响应消息 (MCP payload):**
+    - **Quando o dispositivo responde:** após gerar a lista de ferramentas.
+    - **Resposta do dispositivo:**
       ```json
       {
         "jsonrpc": "2.0",
-        "id": 2, // 匹配请求 ID
+        "id": 2,
         "result": {
-          "tools": [ // 工具对象列表
+          "tools": [
             {
               "name": "self.get_device_status",
               "description": "...",
-              "inputSchema": { ... } // 参数 schema
+              "inputSchema": { ... }
             },
             {
               "name": "self.audio_speaker.set_volume",
               "description": "...",
-              "inputSchema": { ... } // 参数 schema
+              "inputSchema": { ... }
             }
-            // ... 更多工具
+            // ... mais ferramentas
           ],
-          "nextCursor": "..." // 如果列表很大需要分页，这里会包含下一个请求的 cursor 值
+          "nextCursor": "..." // cursor para a próxima página, se houver
         }
       }
       ```
-    - **分页处理：** 如果 `nextCursor` 字段非空，客户端需要再次发送 `tools/list` 请求，并在 `params` 中带上这个 `cursor` 值以获取下一页工具。
+    - **Paginação:** se `nextCursor` não estiver vazio, o cliente deve enviar outro `tools/list` com esse cursor em `params`.
 
-4.  **调用设备工具**
+4.  **Chamar uma ferramenta do dispositivo**
 
-    - **时机：** 后台 API 需要执行设备上的某个具体功能时。
-    - **发送方：** 后台 API (客户端)。
-    - **方法：** `tools/call`
-    - **消息 (MCP payload):**
+    - **Quando:** o backend precisa executar uma funcionalidade específica no dispositivo.
+    - **Quem envia:** backend (cliente).
+    - **Método:** `tools/call`
+    - **Payload MCP:**
       ```json
       {
         "jsonrpc": "2.0",
         "method": "tools/call",
         "params": {
-          "name": "self.audio_speaker.set_volume", // 要调用的工具名称
+          "name": "self.audio_speaker.set_volume",
           "arguments": {
-            // 工具参数，对象格式
-            "volume": 50 // 参数名及其值
+            "volume": 50
           }
         },
-        "id": 3 // 请求 ID
+        "id": 3
       }
       ```
-    - **设备响应时机：** 设备收到 `tools/call` 请求，执行相应的工具函数后。
-    - **设备成功响应消息 (MCP payload):**
+    - **Quando o dispositivo responde:** após executar a ferramenta.
+    - **Resposta de sucesso:**
       ```json
       {
         "jsonrpc": "2.0",
-        "id": 3, // 匹配请求 ID
+        "id": 3,
         "result": {
           "content": [
-            // 工具执行结果内容
-            { "type": "text", "text": "true" } // 示例：set_volume 返回 bool
+            { "type": "text", "text": "true" }
           ],
-          "isError": false // 表示成功
+          "isError": false
         }
       }
       ```
-    - **设备失败响应消息 (MCP payload):**
+    - **Resposta de erro:**
       ```json
       {
         "jsonrpc": "2.0",
-        "id": 3, // 匹配请求 ID
+        "id": 3,
         "error": {
-          "code": -32601, // JSON-RPC 错误码，例如 Method not found (-32601)
-          "message": "Unknown tool: self.non_existent_tool" // 错误描述
+          "code": -32601,
+          "message": "Unknown tool: self.non_existent_tool"
         }
       }
       ```
 
-5.  **设备主动发送消息 (Notifications)**
-    - **时机：** 设备内部发生需要通知后台 API 的事件时（例如，状态变化，虽然代码示例中没有明确的工具发送此类消息，但 `Application::SendMcpMessage` 的存在暗示了设备可能主动发送 MCP 消息）。
-    - **发送方：** 设备 (服务器)。
-    - **方法：** 可能是以 `notifications/` 开头的方法名，或者其他自定义方法。
-    - **消息 (MCP payload):** 遵循 JSON-RPC Notification 格式，没有 `id` 字段。
+5.  **Dispositivo envia notificações ativas**
+    - **Quando:** quando o dispositivo precisa notificar o backend sobre um evento interno (por exemplo, mudança de estado). O código não mostra uma ferramenta explícita, mas `Application::SendMcpMessage` sugere que o dispositivo pode enviar mensagens MCP ativas.
+    - **Quem envia:** dispositivo (servidor).
+    - **Método:** pode começar com `notifications/` ou outro tipo customizado.
+    - **Payload MCP:** formato de notificação JSON-RPC, sem campo `id`.
       ```json
       {
         "jsonrpc": "2.0",
-        "method": "notifications/state_changed", // 示例方法名
+        "method": "notifications/state_changed",
         "params": {
           "newState": "idle",
           "oldState": "connecting"
         }
-        // 没有 id 字段
       }
       ```
-    - **后台 API 处理：** 接收到 Notification 后，后台 API 进行相应的处理，但不回复。
+    - **Como o backend trata:** processa a notificação sem enviar resposta.
 
-## 交互图
+## Diagrama de interação
 
-下面是一个简化的交互序列图，展示了主要的 MCP 消息流程：
+Abaixo está um diagrama simplificado mostrando o fluxo principal de mensagens MCP:
 
 ```mermaid
 sequenceDiagram
     participant Device as ESP32 Device
-    participant BackendAPI as 后台 API (Client)
+    participant BackendAPI as Backend API (Client)
 
-    Note over Device, BackendAPI: 建立 WebSocket / MQTT 连接
+    Note over Device, BackendAPI: Estabelece conexão WebSocket / MQTT
 
-    Device->>BackendAPI: Hello Message (包含 "mcp": true)
+    Device->>BackendAPI: Hello Message (inclui "mcp": true)
 
     BackendAPI->>Device: MCP Initialize Request
     Note over BackendAPI: method: initialize
@@ -258,6 +254,16 @@ sequenceDiagram
         Device->>BackendAPI: MCP Tool Call Error Response
         Note over Device: error: { code: ..., message: ... }
     end
+
+    opt Device Notification
+        Device->>BackendAPI: MCP Notification
+        Note over Device: method: notifications/...
+        Note over Device: params: { ... }
+    end
+```
+
+Este documento descreve o fluxo principal do protocolo MCP neste projeto. Consulte `main/mcp_server.cc` em `McpServer::AddCommonTools` e as implementações de cada ferramenta para detalhes de parâmetros e funcionalidades.
+
 
     opt Device Notification
         Device->>BackendAPI: MCP Notification

@@ -1,139 +1,139 @@
-以下是一份基于代码实现整理的 WebSocket 通信协议文档，概述设备端与服务器之间如何通过 WebSocket 进行交互。
+A seguir está um documento baseado na implementação do código para descrever o protocolo de comunicação WebSocket, explicando como o dispositivo e o servidor interagem via WebSocket.
 
-该文档仅基于所提供的代码推断，实际部署时可能需要结合服务器端实现进行进一步确认或补充。
+Este documento é uma inferência a partir do código fornecido; em implantação real, pode ser necessário confirmar ou complementar com a implementação do servidor.
 
 ---
 
-## 1. 总体流程概览
+## 1. Visão geral do fluxo
 
-1. **设备端初始化**  
-   - 设备上电、初始化 `Application`：  
-     - 初始化音频编解码器、显示屏、LED 等  
-     - 连接网络  
-     - 创建并初始化实现 `Protocol` 接口的 WebSocket 协议实例（`WebsocketProtocol`）  
-   - 进入主循环等待事件（音频输入、音频输出、调度任务等）。
+1. **Inicialização do dispositivo**
+   - O dispositivo liga e inicializa a `Application`:
+     - inicializa codec de áudio, display, LEDs, etc.
+     - conecta à rede
+     - cria e inicializa uma instância do protocolo WebSocket que implementa a interface `Protocol` (`WebsocketProtocol`)
+   - entra no loop principal aguardando eventos (entrada/saída de áudio, tarefas agendadas, etc.).
 
-2. **建立 WebSocket 连接**  
-   - 当设备需要开始语音会话时（例如用户唤醒、手动按键触发等），调用 `OpenAudioChannel()`：  
-     - 根据配置获取 WebSocket URL
-     - 设置若干请求头（`Authorization`, `Protocol-Version`, `Device-Id`, `Client-Id`）  
-     - 调用 `Connect()` 与服务器建立 WebSocket 连接  
+2. **Estabelecimento da conexão WebSocket**
+   - Quando o dispositivo precisa iniciar uma sessão de voz (por exemplo, ativação por voz ou pressionamento de botão), chama `OpenAudioChannel()`:
+     - obtém a URL do WebSocket a partir da configuração
+     - define cabeçalhos de requisição como `Authorization`, `Protocol-Version`, `Device-Id` e `Client-Id`
+     - chama `Connect()` para estabelecer a conexão com o servidor
 
-3. **设备端发送 "hello" 消息**  
-   - 连接成功后，设备会发送一条 JSON 消息，示例结构如下：  
-   ```json
-   {
-     "type": "hello",
-     "version": 1,
-     "features": {
-       "mcp": true
-     },
-     "transport": "websocket",
-     "audio_params": {
-       "format": "opus",
-       "sample_rate": 16000,
-       "channels": 1,
-       "frame_duration": 60
+3. **Dispositivo envia mensagem "hello"**
+   - Após a conexão, o dispositivo envia uma mensagem JSON. Exemplo:
+     ```json
+     {
+       "type": "hello",
+       "version": 1,
+       "features": {
+         "mcp": true
+       },
+       "transport": "websocket",
+       "audio_params": {
+         "format": "opus",
+         "sample_rate": 16000,
+         "channels": 1,
+         "frame_duration": 60
+       }
      }
-   }
-   ```
-   - 其中 `features` 字段为可选，内容根据设备编译配置自动生成。例如：`"mcp": true` 表示支持 MCP 协议。
-   - `frame_duration` 的值对应 `OPUS_FRAME_DURATION_MS`（例如 60ms）。
+     ```
+   - O campo `features` é opcional e pode ser gerado automaticamente com base nas configurações de compilação do dispositivo. Por exemplo, `"mcp": true` indica suporte a MCP.
+   - `frame_duration` corresponde a `OPUS_FRAME_DURATION_MS` (por exemplo, 60 ms).
 
-4. **服务器回复 "hello"**  
-   - 设备等待服务器返回一条包含 `"type": "hello"` 的 JSON 消息，并检查 `"transport": "websocket"` 是否匹配。  
-   - 服务器可选下发 `session_id` 字段，设备端收到后会自动记录。  
-   - 示例：
-   ```json
-   {
-     "type": "hello",
-     "transport": "websocket",
-     "session_id": "xxx",
-     "audio_params": {
-       "format": "opus",
-       "sample_rate": 24000,
-       "channels": 1,
-       "frame_duration": 60
+4. **Servidor responde com "hello"**
+   - O dispositivo aguarda do servidor uma mensagem JSON contendo `"type": "hello"` e verifica se `"transport": "websocket"` corresponde.
+   - O servidor pode enviar opcionalmente `session_id`; o dispositivo registra esse valor automaticamente.
+   - Exemplo:
+     ```json
+     {
+       "type": "hello",
+       "transport": "websocket",
+       "session_id": "xxx",
+       "audio_params": {
+         "format": "opus",
+         "sample_rate": 24000,
+         "channels": 1,
+         "frame_duration": 60
+       }
      }
-   }
-   ```
-   - 如果匹配，则认为服务器已就绪，标记音频通道打开成功。  
-   - 如果在超时时间（默认 10 秒）内未收到正确回复，认为连接失败并触发网络错误回调。
+     ```
+   - Se corresponder, o servidor é considerado pronto e o canal de áudio é marcado como aberto.
+   - Se não receber a resposta correta dentro do timeout (padrão 10 s), a conexão é considerada falha e a rotina de erro de rede é acionada.
 
-5. **后续消息交互**  
-   - 设备端和服务器端之间可发送两种主要类型的数据：  
-     1. **二进制音频数据**（Opus 编码）  
-     2. **文本 JSON 消息**（用于传输聊天状态、TTS/STT 事件、MCP 协议消息等）  
+5. **Interação subsequente**
+   - O dispositivo e o servidor trocam dois tipos principais de dados:
+     1. **Dados binários de áudio** (Opus)
+     2. **Mensagens JSON em texto** (para estado de chat, eventos TTS/STT, mensagens MCP, etc.)
 
-   - 在代码里，接收回调主要分为：  
-     - `OnData(...)`:  
-       - 当 `binary` 为 `true` 时，认为是音频帧；设备会将其当作 Opus 数据进行解码。  
-       - 当 `binary` 为 `false` 时，认为是 JSON 文本，需要在设备端用 cJSON 进行解析并做相应业务逻辑处理（如聊天、TTS、MCP 协议消息等）。  
+   - No código, o callback de recebimento lida com:
+     - `OnData(...)`:
+       - se `binary` for `true`, trata como quadro de áudio e decodifica como Opus
+       - se `binary` for `false`, trata como texto JSON, parseia com cJSON e executa lógica de negócio (chat, TTS, MCP, etc.)
 
-   - 当服务器或网络出现断连，回调 `OnDisconnected()` 被触发：  
-     - 设备会调用 `on_audio_channel_closed_()`，并最终回到空闲状态。
+   - Se o servidor ou a rede desconectar, `OnDisconnected()` é acionado:
+     - o dispositivo chama `on_audio_channel_closed_()` e retorna ao estado ocioso.
 
-6. **关闭 WebSocket 连接**  
-   - 设备在需要结束语音会话时，会调用 `CloseAudioChannel()` 主动断开连接，并回到空闲状态。  
-   - 或者如果服务器端主动断开，也会引发同样的回调流程。
-
----
-
-## 2. 通用请求头
-
-在建立 WebSocket 连接时，代码示例中设置了以下请求头：
-
-- `Authorization`: 用于存放访问令牌，形如 `"Bearer <token>"`  
-- `Protocol-Version`: 协议版本号，与 hello 消息体内的 `version` 字段保持一致  
-- `Device-Id`: 设备物理网卡 MAC 地址
-- `Client-Id`: 软件生成的 UUID（擦除 NVS 或重新烧录完整固件会重置）
-
-这些头会随着 WebSocket 握手一起发送到服务器，服务器可根据需求进行校验、认证等。
+6. **Fechamento da conexão WebSocket**
+   - Quando a sessão de voz termina, o dispositivo chama `CloseAudioChannel()` para encerrar a conexão e voltar ao estado ocioso.
+   - Se o servidor encerrar a conexão, a mesma sequência de callbacks é executada.
 
 ---
 
-## 3. 二进制协议版本
+## 2. Cabeçalhos comuns
 
-设备支持多种二进制协议版本，通过配置中的 `version` 字段指定：
+Durante o handshake WebSocket, o código define os seguintes cabeçalhos:
 
-### 3.1 版本1（默认）
-直接发送 Opus 音频数据，无额外元数据。Websocket 协议会区分 text 与 binary。
+- `Authorization`: token de acesso no formato `"Bearer <token>"`
+- `Protocol-Version`: versão do protocolo, consistente com o campo `version` na mensagem hello
+- `Device-Id`: endereço MAC da interface de rede do dispositivo
+- `Client-Id`: UUID gerado pelo software (pode ser redefinido se o NVS for apagado ou o firmware regravado)
 
-### 3.2 版本2
-使用 `BinaryProtocol2` 结构：
+Esses cabeçalhos são enviados com a handshake do WebSocket, e o servidor pode usá-los para validação e autenticação.
+
+---
+
+## 3. Versões do protocolo binário
+
+O dispositivo suporta diferentes versões do protocolo binário, selecionadas pelo campo `version` nas configurações:
+
+### 3.1 Versão 1 (padrão)
+Envia diretamente dados Opus sem metadados adicionais. O WebSocket diferencia text de binary.
+
+### 3.2 Versão 2
+Usa a estrutura `BinaryProtocol2`:
 ```c
 struct BinaryProtocol2 {
-    uint16_t version;        // 协议版本
-    uint16_t type;           // 消息类型 (0: OPUS, 1: JSON)
-    uint32_t reserved;       // 保留字段
-    uint32_t timestamp;      // 时间戳（毫秒，用于服务器端AEC）
-    uint32_t payload_size;   // 负载大小（字节）
-    uint8_t payload[];       // 负载数据
+    uint16_t version;        // versão do protocolo
+    uint16_t type;           // tipo de mensagem (0: OPUS, 1: JSON)
+    uint32_t reserved;       // reservado
+    uint32_t timestamp;      // timestamp (ms, usado pelo AEC no servidor)
+    uint32_t payload_size;   // tamanho do payload (bytes)
+    uint8_t payload[];       // dados do payload
 } __attribute__((packed));
 ```
 
-### 3.3 版本3
-使用 `BinaryProtocol3` 结构：
+### 3.3 Versão 3
+Usa a estrutura `BinaryProtocol3`:
 ```c
 struct BinaryProtocol3 {
-    uint8_t type;            // 消息类型
-    uint8_t reserved;        // 保留字段
-    uint16_t payload_size;   // 负载大小
-    uint8_t payload[];       // 负载数据
+    uint8_t type;            // tipo de mensagem
+    uint8_t reserved;        // reservado
+    uint16_t payload_size;   // tamanho do payload
+    uint8_t payload[];       // dados do payload
 } __attribute__((packed));
 ```
 
 ---
 
-## 4. JSON 消息结构
+## 4. Estrutura de mensagens JSON
 
-WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及其对应业务逻辑。若消息里包含未列出的字段，可能为可选或特定实现细节。
+Os frames de texto do WebSocket transportam JSON. A seguir, os campos `"type"` mais comuns e seu significado. Se uma mensagem incluir campos não listados aqui, eles podem ser opcionais ou específicos da implementação.
 
-### 4.1 设备端→服务器
+### 4.1 Dispositivo → Servidor
 
-1. **Hello**  
-   - 连接成功后，由设备端发送，告知服务器基本参数。  
-   - 例：
+1. **Hello**
+   - enviado após a conexão para informar parâmetros básicos ao servidor.
+   - Exemplo:
      ```json
      {
        "type": "hello",
@@ -151,14 +151,14 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
      }
      ```
 
-2. **Listen**  
-   - 表示设备端开始或停止录音监听。  
-   - 常见字段：  
-     - `"session_id"`：会话标识  
-     - `"type": "listen"`  
-     - `"state"`：`"start"`, `"stop"`, `"detect"`（唤醒检测已触发）  
-     - `"mode"`：`"auto"`, `"manual"` 或 `"realtime"`，表示识别模式。  
-   - 例：开始监听  
+2. **Listen**
+   - indica que o dispositivo inicia ou para a escuta de áudio.
+   - Campos comuns:
+     - `"session_id"`: identificador da sessão
+     - `"type": "listen"`
+     - `"state"`: `"start"`, `"stop"` ou `"detect"` (indica ativação da palavra de despertar)
+     - `"mode"`: `"auto"`, `"manual"` ou `"realtime"`, indicando o modo de reconhecimento.
+   - Exemplo de início de escuta:
      ```json
      {
        "session_id": "xxx",
@@ -168,9 +168,9 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
      }
      ```
 
-3. **Abort**  
-   - 终止当前说话（TTS 播放）或语音通道。  
-   - 例：
+3. **Abort**
+   - interrompe a fala atual (reprodução TTS) ou o canal de voz.
+   - Exemplo:
      ```json
      {
        "session_id": "xxx",
@@ -178,12 +178,12 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
        "reason": "wake_word_detected"
      }
      ```
-   - `reason` 值可为 `"wake_word_detected"` 或其他。
+   - `reason` pode ser `"wake_word_detected"` ou outro valor.
 
-4. **Wake Word Detected**  
-   - 用于设备端向服务器告知检测到唤醒词。
-   - 在发送该消息之前，可提前发送唤醒词的 Opus 音频数据，用于服务器进行声纹检测。  
-   - 例：
+4. **Wake Word Detected**
+   - informa ao servidor que a palavra de ativação foi detectada.
+   - O dispositivo pode enviar antes o áudio Opus da palavra de ativação para detecção de voz.
+   - Exemplo:
      ```json
      {
        "session_id": "xxx",
@@ -194,9 +194,9 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
      ```
 
 5. **MCP**
-   - 推荐用于物联网控制的新一代协议。所有设备能力发现、工具调用等均通过 type: "mcp" 的消息进行，payload 内部为标准 JSON-RPC 2.0（详见 [MCP 协议文档](./mcp-protocol_zh.md)）。
-   
-   - **设备端到服务器发送 result 的例子：**
+   - recomendada para controle IoT. Descoberta de capacidades, chamadas de ferramenta e outros recursos são transmitidos em mensagens com `type: "mcp"`, cujo `payload` segue JSON-RPC 2.0 padrão (veja [documento MCP](./mcp-protocol_zh.md)).
+
+   - Exemplo de `result` enviado do dispositivo ao servidor:
      ```json
      {
        "session_id": "xxx",
@@ -216,34 +216,33 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
 
 ---
 
-### 4.2 服务器→设备端
+### 4.2 Servidor → Dispositivo
 
-1. **Hello**  
-   - 服务器端返回的握手确认消息。  
-   - 必须包含 `"type": "hello"` 和 `"transport": "websocket"`。  
-   - 可能会带有 `audio_params`，表示服务器期望的音频参数，或与设备端对齐的配置。   
-   - 服务器可选下发 `session_id` 字段，设备端收到后会自动记录。  
-   - 成功接收后设备端会设置事件标志，表示 WebSocket 通道就绪。
+1. **Hello**
+   - mensagem de handshake de confirmação do servidor.
+   - Deve incluir `"type": "hello"` e `"transport": "websocket"`.
+   - Pode conter `audio_params` para indicar os parâmetros de áudio esperados.
+   - O servidor pode enviar `session_id`, que o dispositivo registra automaticamente.
+   - Após receber com sucesso, o dispositivo marca o canal WebSocket como pronto.
 
-2. **STT**  
+2. **STT**
    - `{"session_id": "xxx", "type": "stt", "text": "..."}`
-   - 表示服务器端识别到了用户语音。（例如语音转文本结果）  
-   - 设备可能将此文本显示到屏幕上，后续再进入回答等流程。
+   - Indica que o servidor reconheceu a fala do usuário.
+   - O dispositivo pode exibir o texto e seguir para o fluxo de resposta.
 
-3. **LLM**  
+3. **LLM**
    - `{"session_id": "xxx", "type": "llm", "emotion": "happy", "text": "😀"}`
-   - 服务器指示设备调整表情动画 / UI 表达。  
+   - Informa ao dispositivo para ajustar animações ou expressão de UI.
 
-4. **TTS**  
-   - `{"session_id": "xxx", "type": "tts", "state": "start"}`：服务器准备下发 TTS 音频，设备端进入 "speaking" 播放状态。  
-   - `{"session_id": "xxx", "type": "tts", "state": "stop"}`：表示本次 TTS 结束。  
-   - `{"session_id": "xxx", "type": "tts", "state": "sentence_start", "text": "..."}`
-     - 让设备在界面上显示当前要播放或朗读的文本片段（例如用于显示给用户）。  
+4. **TTS**
+   - `{"session_id": "xxx", "type": "tts", "state": "start"}`: o servidor está prestes a enviar áudio TTS; o dispositivo entra em estado de reprodução.
+   - `{"session_id": "xxx", "type": "tts", "state": "stop"}`: indica fim da reprodução TTS.
+   - `{"session_id": "xxx", "type": "tts", "state": "sentence_start", "text": "..."}`: indica texto de frase atual para exibição.
 
 5. **MCP**
-   - 服务器通过 type: "mcp" 的消息下发物联网相关的控制指令或返回调用结果，payload 结构同上。
-   
-   - **服务器到设备端发送 tools/call 的例子：**
+   - o servidor envia comandos IoT ou resultados de chamada via mensagens com `type: "mcp"`; o payload segue a mesma estrutura JSON-RPC.
+
+   - Exemplo de `tools/call` enviado pelo servidor:
      ```json
      {
        "session_id": "xxx",
@@ -259,6 +258,243 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
        }
      }
      ```
+
+6. **System**
+   - comandos de controle de sistema, frequentemente usados para atualização remota.
+   - Exemplo:
+     ```json
+     {
+       "session_id": "xxx",
+       "type": "system",
+       "command": "reboot"
+     }
+     ```
+   - Comandos suportados:
+     - `"reboot"`: reiniciar o dispositivo
+
+7. **Custom** (opcional)
+   - mensagens personalizadas quando `CONFIG_RECEIVE_CUSTOM_MESSAGE` está habilitado.
+   - Exemplo:
+     ```json
+     {
+       "session_id": "xxx",
+       "type": "custom",
+       "payload": {
+         "message": "conteúdo personalizado"
+       }
+     }
+     ```
+
+8. **Dados de áudio: frames binários**
+   - quando o servidor envia frames binários de áudio Opus, o dispositivo decodifica e reproduz.
+   - se o dispositivo estiver em estado de escuta (`listening`), os frames recebidos podem ser ignorados ou descartados para evitar conflito.
+
+---
+
+## 5. Codec de áudio
+
+1. **Envio de gravação pelo dispositivo**
+   - o áudio capturado passa por possível cancelamento de eco, redução de ruído e ganho antes de ser codificado em Opus e enviado como frame binário ao servidor.
+   - dependendo da versão do protocolo, pode enviar apenas dados Opus (versão 1) ou usar protocolo binário com metadados (versão 2/3).
+
+2. **Reprodução de áudio recebido**
+   - frames binários recebidos do servidor também são tratados como Opus.
+   - o dispositivo decodifica e reproduz pelo output de áudio.
+   - se a taxa de amostragem do servidor for diferente da do dispositivo, ocorre reamostragem após a decodificação.
+
+---
+
+## 6. Fluxos de estado comuns
+
+A seguir estão os fluxos de estado principais do dispositivo em relação às mensagens WebSocket:
+
+1. **Idle** → **Connecting**
+   - após ativação ou trigger, o dispositivo chama `OpenAudioChannel()`, estabelece conexão WebSocket e envia `"type":"hello"`.
+
+2. **Connecting** → **Listening**
+   - ao conectar com sucesso, se `SendStartListening(...)` for chamado, o dispositivo entra em estado de escuta e envia áudio ao servidor.
+
+3. **Listening** → **Speaking**
+   - ao receber `tts` com `state: "start"`, o dispositivo para a gravação e reproduz o áudio recebido.
+
+4. **Speaking** → **Idle**
+   - ao receber `tts` com `state: "stop"`, a reprodução termina. Se não houver reescuta automática, volta para Idle; caso contrário, retorna a Listening.
+
+5. **Listening / Speaking** → **Idle** (em exceção ou interrupção)
+   - ao chamar `SendAbortSpeaking(...)` ou `CloseAudioChannel()`, a sessão é interrompida, a conexão WebSocket fecha e o estado retorna a Idle.
+
+### Diagrama de estado em modo automático
+
+```mermaid
+stateDiagram
+  direction TB
+  [*] --> kDeviceStateUnknown
+  kDeviceStateUnknown --> kDeviceStateStarting: inicialização
+  kDeviceStateStarting --> kDeviceStateWifiConfiguring: configurando WiFi
+  kDeviceStateStarting --> kDeviceStateActivating: ativando dispositivo
+  kDeviceStateActivating --> kDeviceStateUpgrading: detectou nova versão
+  kDeviceStateActivating --> kDeviceStateIdle: ativação concluída
+  kDeviceStateIdle --> kDeviceStateConnecting: inicia conexão
+  kDeviceStateConnecting --> kDeviceStateIdle: falha na conexão
+  kDeviceStateConnecting --> kDeviceStateListening: conexão bem-sucedida
+  kDeviceStateListening --> kDeviceStateSpeaking: começa a falar
+  kDeviceStateSpeaking --> kDeviceStateListening: termina a fala
+  kDeviceStateListening --> kDeviceStateIdle: parada manual
+  kDeviceStateSpeaking --> kDeviceStateIdle: parada automática
+```
+
+### Diagrama de estado em modo manual
+
+```mermaid
+stateDiagram
+  direction TB
+  [*] --> kDeviceStateUnknown
+  kDeviceStateUnknown --> kDeviceStateStarting: inicialização
+  kDeviceStateStarting --> kDeviceStateWifiConfiguring: configurando WiFi
+  kDeviceStateStarting --> kDeviceStateActivating: ativando dispositivo
+  kDeviceStateActivating --> kDeviceStateUpgrading: detectou nova versão
+  kDeviceStateActivating --> kDeviceStateIdle: ativação concluída
+  kDeviceStateIdle --> kDeviceStateConnecting: inicia conexão
+  kDeviceStateConnecting --> kDeviceStateIdle: falha na conexão
+  kDeviceStateConnecting --> kDeviceStateListening: conexão bem-sucedida
+  kDeviceStateIdle --> kDeviceStateListening: inicia escuta
+  kDeviceStateListening --> kDeviceStateIdle: encerra escuta
+  kDeviceStateIdle --> kDeviceStateSpeaking: inicia fala
+  kDeviceStateSpeaking --> kDeviceStateIdle: fala encerrada
+```
+
+---
+
+## 7. Tratamento de erros
+
+1. **Falha de conexão**
+   - se `Connect(url)` falhar ou o servidor não enviar a mensagem hello no timeout, `on_network_error_()` é acionado. O dispositivo pode exibir erro de conexão.
+
+2. **Servidor desconecta**
+   - se o WebSocket desconectar inesperadamente, `OnDisconnected()` é acionado:
+     - o dispositivo chama `on_audio_channel_closed_()`
+     - muda para Idle ou tenta lógica de retry.
+
+---
+
+## 8. Outras observações
+
+1. **Autenticação**
+   - o dispositivo envia `Authorization: Bearer <token>` para autenticação. O servidor deve validar o token.
+   - se o token expirar ou for inválido, o servidor pode recusar o handshake ou desconectar posteriormente.
+
+2. **Controle de sessão**
+   - algumas mensagens incluem `session_id` para distinguir conversas ou operações independentes. O servidor pode isolar o tratamento de cada sessão.
+
+3. **Payload de áudio**
+   - o código usa Opus com `sample_rate = 16000` e mono. A duração do quadro é controlada por `OPUS_FRAME_DURATION_MS`, geralmente 60 ms. Ajustes podem ser feitos conforme largura de banda ou desempenho.
+   - para melhor reprodução de áudio, o servidor pode usar taxa de amostragem de 24000 no downstream.
+
+4. **Configuração de versão do protocolo**
+   - o campo `version` define a versão do protocolo binário (1, 2 ou 3)
+   - versão 1: envia dados Opus puros
+   - versão 2: usa protocolo binário com timestamp, adequado a AEC no servidor
+   - versão 3: usa protocolo binário simplificado
+
+5. **Controle IoT recomendado via MCP**
+   - a descoberta de capacidades, sincronização de estado e comandos de controle devem ser feitos via MCP (`type: "mcp"`).
+   - a antiga abordagem `type: "iot"` está obsoleta.
+   - MCP pode ser transportado sobre WebSocket, MQTT e outros protocolos de base, oferecendo melhor extensibilidade e padronização.
+   - para detalhes, veja [MCP protocol](./mcp-protocol_zh.md) e [MCP usage](./mcp-usage_zh.md).
+
+6. **JSON inválido ou faltando campos**
+   - se o JSON não contiver campos obrigatórios, como `{"type": ...}`, o dispositivo registra erro em log (`ESP_LOGE(TAG, "Missing message type, data: %s", data);`) e não executa ações.
+
+---
+
+## 9. Exemplos de mensagens
+
+Aqui está um exemplo simplificado de troca de mensagens bidirecionais:
+
+1. **Dispositivo → Servidor** (handshake)
+   ```json
+   {
+     "type": "hello",
+     "version": 1,
+     "features": {
+       "mcp": true
+     },
+     "transport": "websocket",
+     "audio_params": {
+       "format": "opus",
+       "sample_rate": 16000,
+       "channels": 1,
+       "frame_duration": 60
+     }
+   }
+   ```
+
+2. **Servidor → Dispositivo** (handshake response)
+   ```json
+   {
+     "type": "hello",
+     "transport": "websocket",
+     "session_id": "xxx",
+     "audio_params": {
+       "format": "opus",
+       "sample_rate": 16000
+     }
+   }
+   ```
+
+3. **Dispositivo → Servidor** (início de escuta)
+   ```json
+   {
+     "session_id": "xxx",
+     "type": "listen",
+     "state": "start",
+     "mode": "auto"
+   }
+   ```
+   Simultaneamente, o dispositivo começa a enviar frames binários Opus.
+
+4. **Servidor → Dispositivo** (resultado ASR)
+   ```json
+   {
+     "session_id": "xxx",
+     "type": "stt",
+     "text": "usuário falou algo"
+   }
+   ```
+
+5. **Servidor → Dispositivo** (início do TTS)
+   ```json
+   {
+     "session_id": "xxx",
+     "type": "tts",
+     "state": "start"
+   }
+   ```
+   O servidor então envia frames binários de áudio para o dispositivo reproduzir.
+
+6. **Servidor → Dispositivo** (fim do TTS)
+   ```json
+   {
+     "session_id": "xxx",
+     "type": "tts",
+     "state": "stop"
+   }
+   ```
+   O dispositivo para a reprodução de áudio e, se não houver mais instruções, retorna ao estado ocioso.
+
+---
+
+## 10. Conclusão
+
+Este protocolo transporta JSON textual e frames binários de áudio sobre WebSocket, cobrindo funcionalidades como upload de áudio, reprodução TTS, reconhecimento de voz, gerenciamento de estado e comandos MCP. Seus principais pontos:
+
+- **Handshake**: envia `"type":"hello"` e aguarda resposta.
+- **Canal de áudio**: transmissões Opus bidirecionais em frames binários, com suporte a várias versões de protocolo.
+- **Mensagens JSON**: `"type"` identifica diferentes fluxos de negócios, como TTS, STT, MCP, WakeWord, System e Custom.
+- **Extensibilidade**: permite adicionar campos no JSON ou headers extras para autenticação.
+
+Servidor e dispositivo devem acordar previamente o significado de campos, a ordem das mensagens e o tratamento de erros para garantir comunicação estável. Essas informações servem como base para integração e desenvolvimento.
+
 
 6. **System**
    - 系统控制命令，常用于远程升级更新。
