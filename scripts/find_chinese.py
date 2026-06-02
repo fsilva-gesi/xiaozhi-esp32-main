@@ -1,5 +1,6 @@
-import re
 import os
+import re
+
 pattern = re.compile(r'[\u4e00-\u9fff]+')
 results = {}
 for root, dirs, files in os.walk('.'):
